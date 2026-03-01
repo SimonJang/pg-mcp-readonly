@@ -2,6 +2,8 @@
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes PostgreSQL databases. It allows LLM clients (like Claude Desktop or Claude Code) to explore your database schema and run read-only SQL queries.
 
+This project is based on the original [`@modelcontextprotocol/server-postgres`](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres) reference server, which has since been [archived and deprecated](https://www.npmjs.com/package/@modelcontextprotocol/server-postgres). The original server contained a [SQL injection vulnerability](https://securitylabs.datadoghq.com/articles/mcp-vulnerability-case-study-SQL-injection-in-the-postgresql-mcp-server/) that allowed attackers to bypass the read-only transaction by injecting multi-statement payloads (e.g. `COMMIT; DROP TABLE ...`). This project fixes that vulnerability by using **prepared statements** to enforce single-statement execution and **destroying connections** after each query to prevent session state poisoning.
+
 ## Features
 
 - **Read-only by design** — all queries run inside a `READ ONLY` transaction and use prepared statements to prevent multi-statement SQL injection
