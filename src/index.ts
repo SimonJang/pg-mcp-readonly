@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { initPool, getPool, getResourceBaseUrl, closePool } from "./db.js";
+import { initPool, getPool, closePool } from "./db.js";
 import { createServer } from "./server.js";
 
 const args = process.argv.slice(2);
@@ -11,16 +11,19 @@ if (args.length === 0) {
 
 initPool(args[0]);
 
-const server = createServer(getPool(), getResourceBaseUrl());
+const server = createServer(getPool());
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  process.on("SIGINT", async () => {
+  const shutdown = async () => {
     await closePool();
     process.exit(0);
-  });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((error) => {

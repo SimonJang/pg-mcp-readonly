@@ -4,9 +4,9 @@ import pg from "pg";
 
 const SCHEMA_PATH = "schema";
 
-export function createServer(pool: pg.Pool, resourceBaseUrl: URL): McpServer {
+export function createServer(pool: pg.Pool): McpServer {
   const server = new McpServer({
-    name: "postgres-mcp",
+    name: "mcp-server-postgres",
     version: "0.1.0",
   });
 
@@ -22,7 +22,7 @@ export function createServer(pool: pg.Pool, resourceBaseUrl: URL): McpServer {
           );
           return {
             resources: result.rows.map((row: { table_name: string }) => ({
-              uri: new URL(`${row.table_name}/${SCHEMA_PATH}`, resourceBaseUrl).href,
+              uri: `postgres://${encodeURIComponent(row.table_name)}/${SCHEMA_PATH}`,
               mimeType: "application/json",
               name: `"${row.table_name}" database schema`,
             })),
@@ -34,18 +34,20 @@ export function createServer(pool: pg.Pool, resourceBaseUrl: URL): McpServer {
     }),
     { mimeType: "application/json" },
     async (uri) => {
-      const pathComponents = uri.pathname.split("/");
-      const schema = pathComponents.pop();
-      const tableName = pathComponents.pop();
-
-      if (schema !== SCHEMA_PATH) {
+      const schemaComponent = uri.pathname.replace(/^\//, "");
+      if (schemaComponent !== SCHEMA_PATH) {
         throw new Error("Invalid resource URI");
+      }
+
+      const tableName = decodeURIComponent(uri.hostname);
+      if (!tableName) {
+        throw new Error("Invalid resource URI: missing table name");
       }
 
       const client = await pool.connect();
       try {
         const result = await client.query(
-          "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1",
+          "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1 AND table_schema = 'public'",
           [tableName]
         );
         return {

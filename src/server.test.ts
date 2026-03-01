@@ -16,7 +16,14 @@ function createMockPool(queryFn: (...args: unknown[]) => unknown): pg.Pool {
   } as unknown as pg.Pool;
 }
 
-const resourceBaseUrl = new URL("postgres://localhost:5432/testdb");
+async function createTestPair(pool: pg.Pool) {
+  const srv = createServer(pool);
+  const cli = new Client({ name: "test", version: "1.0.0" });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await srv.connect(st);
+  await cli.connect(ct);
+  return { srv, cli };
+}
 
 describe("postgres-mcp server", () => {
   let client: Client;
@@ -26,7 +33,7 @@ describe("postgres-mcp server", () => {
   beforeAll(async () => {
     mockPool = createMockPool(() => ({ rows: [], rowCount: 0 }));
 
-    server = createServer(mockPool, resourceBaseUrl);
+    server = createServer(mockPool);
     client = new Client({ name: "test-client", version: "1.0.0" });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -61,11 +68,7 @@ describe("postgres-mcp server", () => {
         return { rows: mockRows };
       });
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       const result = await cli.callTool({ name: "query", arguments: { sql: "SELECT * FROM users" } });
       expect(result.isError).toBe(false);
@@ -83,11 +86,7 @@ describe("postgres-mcp server", () => {
         return { rows: [] };
       });
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       await cli.callTool({ name: "query", arguments: { sql: "SELECT 1" } });
       expect(queries[0]).toBe("BEGIN TRANSACTION READ ONLY");
@@ -115,11 +114,7 @@ describe("postgres-mcp server", () => {
       ];
       const pool = createMockPool(() => ({ rows: mockTables }));
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       const result = await cli.callTool({ name: "list-tables", arguments: {} });
       const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
@@ -138,11 +133,7 @@ describe("postgres-mcp server", () => {
       ];
       const pool = createMockPool(() => ({ rows: mockColumns }));
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       const result = await cli.callTool({
         name: "describe-table",
@@ -162,11 +153,7 @@ describe("postgres-mcp server", () => {
         return { rows: [] };
       });
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       await cli.callTool({ name: "describe-table", arguments: { table: "users" } });
       expect(capturedParams).toEqual(["public", "users"]);
@@ -177,38 +164,32 @@ describe("postgres-mcp server", () => {
   });
 
   describe("resources", () => {
-    it("lists table schemas as resources", async () => {
+    it("lists table schemas as resources with URIs matching the template", async () => {
       const pool = createMockPool(() => ({
         rows: [{ table_name: "users" }, { table_name: "orders" }],
       }));
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       const result = await cli.listResources();
       expect(result.resources).toHaveLength(2);
       expect(result.resources[0].name).toBe('"users" database schema');
+      expect(result.resources[0].uri).toBe("postgres://users/schema");
       expect(result.resources[1].name).toBe('"orders" database schema');
+      expect(result.resources[1].uri).toBe("postgres://orders/schema");
 
       await cli.close();
       await srv.close();
     });
 
-    it("reads a table schema resource", async () => {
+    it("reads a table schema resource by hostname", async () => {
       const mockColumns = [
         { column_name: "id", data_type: "integer" },
         { column_name: "email", data_type: "text" },
       ];
       const pool = createMockPool(() => ({ rows: mockColumns }));
 
-      const srv = createServer(pool, resourceBaseUrl);
-      const cli = new Client({ name: "test", version: "1.0.0" });
-      const [ct, st] = InMemoryTransport.createLinkedPair();
-      await srv.connect(st);
-      await cli.connect(ct);
+      const { srv, cli } = await createTestPair(pool);
 
       const result = await cli.readResource({
         uri: "postgres://users/schema",
@@ -217,6 +198,22 @@ describe("postgres-mcp server", () => {
       const text = "text" in content ? content.text : "";
       const parsed = JSON.parse(text);
       expect(parsed).toEqual(mockColumns);
+
+      await cli.close();
+      await srv.close();
+    });
+
+    it("filters resource columns query by public schema", async () => {
+      let capturedQuery = "";
+      const pool = createMockPool((sql: unknown) => {
+        if (typeof sql === "string") capturedQuery = sql;
+        return { rows: [] };
+      });
+
+      const { srv, cli } = await createTestPair(pool);
+
+      await cli.readResource({ uri: "postgres://users/schema" });
+      expect(capturedQuery).toContain("table_schema = 'public'");
 
       await cli.close();
       await srv.close();
